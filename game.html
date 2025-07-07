@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Puzzle Shou</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: sans-serif;
+    overflow: hidden;
+    background-color: #ffffff;
+    color: #000000;
+  }
+  #ui, #theme-btn, #char, #retry-btn {
+    display: none;
+  }
+  #ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    font-size: 18px;
+    z-index: 2;
+  }
+  #theme-btn {
+    position: absolute;
+    top: 10px;
+    right:  10px;
+    width: 50px;
+    height: 50px;
+    cursor: pointer;
+    z-index: 2;
+  }
+  #char {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    width: 200px;
+    z-index: 2;
+  }
+  #start-btn, #retry-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 32px;
+    padding: 20px 40px;
+    background-color: #444;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    z-index: 3;
+  }
+  canvas {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+  body.dark {
+    background-color: #000000;
+    color: #ffffff;
+  }
+</style>
+</head>
+<body>
+<div id="ui">Score: <span id="score">0</span> | High: <span id="high">0</span> | Time: <span id="time">30</span>s</div>
+<img id="theme-btn" src="images/sol.png" alt="theme toggle">
+<img id="char" src="images/idle.gif" alt="Shou">
+<canvas id="board"></canvas>
+<button id="start-btn">JUGAR</button>
+<button id="retry-btn">REINTENTAR</button>
+<audio id="clickSfx" src="audio/click.mp3"></audio>
+<script>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const uiScore = document.getElementById('score'),
+      uiHigh = document.getElementById('high'),
+      uiTime = document.getElementById('time');
+const char = document.getElementById('char'),
+      themeBtn = document.getElementById('theme-btn');
+const clickSfx = document.getElementById('clickSfx');
+const startBtn = document.getElementById('start-btn');
+const retryBtn = document.getElementById('retry-btn');
+
+let mode = 'light';
+let score = 0;
+let high = parseInt(localStorage.getItem('highShou')) || 0;
+let time = 30, timer;
+let blinkTimer, blinkTimeout;
+let cell = 80, gridSize = 6;
+let grid = [], pairs = [], connecting = null, connections = [];
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  drawGrid();
+}
+
+function randomGrid() {
+  grid = Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
+  pairs = [];
+  connections = [];
+  const colors = ['red', 'blue', 'orange'];
+  colors.forEach(color => {
+    let placed = 0;
+    while (placed < 2) {
+      let x = Math.floor(Math.random() * gridSize);
+      let y = Math.floor(Math.random() * gridSize);
+      if (!grid[y][x]) {
+        grid[y][x] = color;
+        pairs.push({ color, x, y });
+        placed++;
+      }
+    }
+  });
+}
+
+function drawGrid() {
+  ctx.fillStyle = mode === 'light' ? '#ffffff' : '#000000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const ox = (canvas.width - gridSize * cell) / 2;
+  const oy = (canvas.height - gridSize * cell) / 2;
+  ctx.strokeStyle = mode === 'light' ? '#000' : '#fff';
+  ctx.lineWidth = 2;
+
+  for (let i = 0; i <= gridSize; i++) {
+    ctx.beginPath();
+    ctx.moveTo(ox + i * cell, oy);
+    ctx.lineTo(ox + i * cell, oy + gridSize * cell);
+    ctx.stroke();
+  }
+  for (let j = 0; j <= gridSize; j++) {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy + j * cell);
+    ctx.lineTo(ox + gridSize * cell, oy + j * cell);
+    ctx.stroke();
+  }
+
+  connections.forEach(c => {
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(ox + c.from.x * cell + cell / 2, oy + c.from.y * cell + cell / 2);
+    ctx.lineTo(ox + c.to.x * cell + cell / 2, oy + c.to.y * cell + cell / 2);
+    ctx.stroke();
+  });
+
+  pairs.forEach(p => {
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(ox + p.x * cell + cell / 2, oy + p.y * cell + cell / 2, cell / 3, 0, 2 * Math.PI);
+    ctx.fill();
+  });
+
+  if (connecting) {
+    ctx.strokeStyle = connecting.color;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(connecting.sx, connecting.sy);
+    ctx.lineTo(connecting.mx, connecting.my);
+    ctx.stroke();
+  }
+}
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const ox = (canvas.width - gridSize * cell) / 2;
+  const oy = (canvas.height - gridSize * cell) / 2;
+  pairs.forEach(p => {
+    const cx = ox + p.x * cell + cell / 2;
+    const cy = oy + p.y * cell + cell / 2;
+    const dist = Math.hypot(mx - cx, my - cy);
+    if (dist < cell / 2) {
+      connecting = { color: p.color, from: p, sx: cx, sy: cy, mx, my };
+    }
+  });
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (connecting) {
+    const rect = canvas.getBoundingClientRect();
+    connecting.mx = e.clientX - rect.left;
+    connecting.my = e.clientY - rect.top;
+    drawGrid();
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (connecting) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const ox = (canvas.width - gridSize * cell) / 2;
+    const oy = (canvas.height - gridSize * cell) / 2;
+    let found = false;
+    pairs.forEach(p => {
+      const alreadyConnected = connections.some(c =>
+        (c.from.x === connecting.from.x && c.from.y === connecting.from.y && c.to.x === p.x && c.to.y === p.y) ||
+        (c.to.x === connecting.from.x && c.to.y === connecting.from.y && c.from.x === p.x && c.from.y === p.y)
+      );
+      if (p.color === connecting.color && (p.x !== connecting.from.x || p.y !== connecting.from.y) && !alreadyConnected) {
+        const cx = ox + p.x * cell + cell / 2;
+        const cy = oy + p.y * cell + cell / 2;
+        const dist = Math.hypot(mx - cx, my - cy);
+        if (dist < cell / 2) {
+          connections.push({ color: connecting.color, from: connecting.from, to: p });
+          found = true;
+        }
+      }
+    });
+    connecting = null;
+    drawGrid();
+    checkWin();
+  }
+});
+
+function checkWin() {
+  const connectedColors = connections.map(c => c.color);
+  const uniqueColors = [...new Set(pairs.map(p => p.color))];
+  const connectedPairs = uniqueColors.every(color => connectedColors.includes(color));
+  if (connectedPairs) {
+    score += 30;
+    uiScore.textContent = score;
+    if (score > high) {
+      high = score;
+      uiHigh.textContent = high;
+      localStorage.setItem('highShou', high);
+    }
+    win();
+  }
+}
+
+function win() {
+  showChar('win');
+  setTimeout(() => {
+    randomGrid();
+    drawGrid();
+    time = 30;
+    showChar('idle');
+  }, 1500);
+}
+
+function lose() {
+  clearInterval(timer);
+  showChar('lose');
+  retryBtn.style.display = 'block';
+}
+
+retryBtn.addEventListener('click', () => {
+  retryBtn.style.display = 'none';
+  score = 0;
+  uiScore.textContent = score;
+  randomGrid();
+  drawGrid();
+  showChar('idle');
+  startTimer();
+});
+
+function showChar(state) {
+  clearTimeout(blinkTimeout);
+  clearInterval(blinkTimer);
+  let name = 'idle';
+  if (state === 'win') name = 'win';
+  else if (state === 'lose') name = 'lose';
+  else if (state === 'blink') name = 'blink';
+
+  char.src = `images/${name}${mode === 'dark' ? '-dark' : ''}.gif`;
+
+  if (state === 'idle') scheduleBlink();
+  else if (state === 'blink') blinkTimeout = setTimeout(() => showChar('idle'), 1200);
+}
+
+function scheduleBlink() {
+  blinkTimer = setTimeout(() => showChar('blink'), 8000);
+}
+
+function toggleTheme() {
+  document.body.classList.toggle('dark');
+  mode = mode === 'light' ? 'dark' : 'light';
+  themeBtn.src = `images/${mode === 'light' ? 'sol' : 'luna'}.png`;
+  showChar('idle');
+  drawGrid();
+}
+
+themeBtn.addEventListener('click', toggleTheme);
+
+function startTimer() {
+  clearInterval(timer);
+  timer = setInterval(() => {
+    time--;
+    uiTime.textContent = time;
+    if (time <= 0) lose();
+  }, 500);
+}
+
+startBtn.addEventListener('click', () => {
+  startBtn.style.display = 'none';
+  document.getElementById('ui').style.display = 'block';
+  themeBtn.style.display = 'block';
+  char.style.display = 'block';
+  uiHigh.textContent = high;
+  resizeCanvas();
+  randomGrid();
+  drawGrid();
+  showChar('idle');
+  startTimer();
+});
+
+window.addEventListener('resize', resizeCanvas);
+</script>
+</body>
+</html>
